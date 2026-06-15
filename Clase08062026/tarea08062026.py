@@ -44,7 +44,7 @@ from sklearn.impute import SimpleImputer
 from sklearn.model_selection import StratifiedKFold, cross_val_score
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.decomposition import PCA
+
 from sklearn.metrics import (
     accuracy_score, roc_auc_score,
     classification_report, confusion_matrix
@@ -52,7 +52,7 @@ from sklearn.metrics import (
 
 # Transformers
 import torch
-from transformers import AutoTokenizer, AutoModel
+
 
 print("Imports OK")
 print(f"PyTorch version: {torch.__version__}")
@@ -76,7 +76,7 @@ from google.colab import files
 uploaded = files.upload()
 df_raw = pd.read_csv(list(uploaded.keys())[0])
 
-5. AGENTE 1 — Normalizador
+"""5. AGENTE 1 — Normalizador"""
 
 prefix_normalizador = """
 Eres el Agente Normalizador dentro de un pipeline de Machine Learning.
@@ -212,80 +212,59 @@ print("PLAN DEL AGENTE 2:")
 print("="*60)
 print(plan_entrenamiento['output'])
 
-# --- DistilBERT: embeddings semanticos de los nombres ---
-print("="*60)
-print("GENERANDO EMBEDDINGS CON DISTILBERT")
-print("="*60)
+# --- Construccion de la feature matrix ---
+feat_cols = [c for c in df_clean.columns if c != 'Survived']
+X = df_clean[feat_cols].values
+y = df_clean['Survived'].values
+print(f"Feature matrix final: {X.shape}")
 
-MODELO_HF  = 'distilbert-base-uncased'
-MAX_LEN    = 32
-BATCH_SIZE = 32
-EMBED_DIM  = 32
-device     = 'cuda' if torch.cuda.is_available() else 'cpu'
+# Validacion cruzada estratificada
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
 
-tokenizer  = AutoTokenizer.from_pretrained(MODELO_HF)
-bert_model = AutoModel.from_pretrained(MODELO_HF).to(device)
-bert_model.eval()
-print(f"DistilBERT cargado en: {device}")
+candidatos = {
+    'Logistic Regression' : LogisticRegression(max_iter=1000, random_state=42),
+    'Random Forest'       : RandomForestClassifier(n_estimators=200, random_state=42),
+    'Gradient Boosting'   : GradientBoostingClassifier(n_estimators=200, random_state=42),
+}
 
-def get_embeddings(textos):
-    all_embs = []
-    with torch.no_grad():
-        for i in range(0, len(textos), BATCH_SIZE):
-            batch = textos[i : i + BATCH_SIZE]
-            enc   = tokenizer(
-                batch, padding=True, truncation=True,
-                max_length=MAX_LEN, return_tensors='pt'
-            ).to(device)
-            out   = bert_model(**enc)
-            cls   = out.last_hidden_state[:, 0, :].cpu().numpy()
-            all_embs.append(cls)
-    return np.vstack(all_embs)
+resultados = {}
+print("\nValidacion cruzada (5 folds):")
+print("-"*50)
+for nombre, modelo in candidatos.items():
+    scores = cross_val_score(modelo, X, y, cv=cv, scoring='accuracy')
+    resultados[nombre] = {'mean': scores.mean(), 'std': scores.std(), 'scores': scores}
+    print(f"  {nombre:25s} -> {scores.mean():.4f} +/- {scores.std():.4f}")
 
-embs_raw = get_embeddings(nombres.tolist())
-pca      = PCA(n_components=EMBED_DIM, random_state=42)
-embs     = pca.fit_transform(embs_raw)
-print(f"Embeddings shape: {embs_raw.shape} -> reducidos a {embs.shape} con PCA")
+# Seleccionar el mejor modelo
+nombre_modelo = max(resultados, key=lambda k: resultados[k]['mean'])
+print(f"\nModelo ganador: {nombre_modelo}")
 
-# --- DistilBERT: embeddings semanticos de los nombres ---
-print("="*60)
-print("GENERANDO EMBEDDINGS CON DISTILBERT")
-print("="*60)
+from sklearn.model_selection import train_test_split
 
-MODELO_HF  = 'distilbert-base-uncased'
-MAX_LEN    = 32
-BATCH_SIZE = 32
-EMBED_DIM  = 32
-device     = 'cuda' if torch.cuda.is_available() else 'cpu'
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
 
-tokenizer  = AutoTokenizer.from_pretrained(MODELO_HF)
-bert_model = AutoModel.from_pretrained(MODELO_HF).to(device)
-bert_model.eval()
-print(f"DistilBERT cargado en: {device}")
+mejor_modelo = candidatos[nombre_modelo]
+mejor_modelo.fit(X_train, y_train)
 
-def get_embeddings(textos):
-    all_embs = []
-    with torch.no_grad():
-        for i in range(0, len(textos), BATCH_SIZE):
-            batch = textos[i : i + BATCH_SIZE]
-            enc   = tokenizer(
-                batch, padding=True, truncation=True,
-                max_length=MAX_LEN, return_tensors='pt'
-            ).to(device)
-            out   = bert_model(**enc)
-            cls   = out.last_hidden_state[:, 0, :].cpu().numpy()
-            all_embs.append(cls)
-    return np.vstack(all_embs)
+y_pred = mejor_modelo.predict(X_test)
+y_prob = mejor_modelo.predict_proba(X_test)[:, 1]
 
-embs_raw = get_embeddings(nombres.tolist())
-pca      = PCA(n_components=EMBED_DIM, random_state=42)
-embs     = pca.fit_transform(embs_raw)
-print(f"Embeddings shape: {embs_raw.shape} -> reducidos a {embs.shape} con PCA")
+metricas = {
+    'accuracy'  : accuracy_score(y_test, y_pred),
+    'roc_auc'   : roc_auc_score(y_test, y_prob),
+    'report'    : classification_report(y_test, y_pred),
+    'cm'        : confusion_matrix(y_test, y_pred),
+    'cv_results': resultados
+}
+
+print(f"\nAccuracy final : {metricas['accuracy']:.4f}")
+print(f"AUC-ROC final  : {metricas['roc_auc']:.4f}")
 
 # --- Construccion de la feature matrix y entrenamiento ---
 feat_cols = [c for c in df_clean.columns if c != 'Survived']
-X_tab     = df_clean[feat_cols].values
-X         = np.hstack([X_tab, embs])
+X = df_clean[feat_cols].values
 y         = df_clean['Survived'].values
 print(f"Feature matrix final: {X.shape}  (tabulares + embeddings DistilBERT)")
 
@@ -332,12 +311,13 @@ metricas = {
     'cv_results': resultados
 }
 
-print(f"\nAccuracy final : {metricas['accuracy']:.4f}")
-print(f"AUC-ROC final  : {metricas['roc_auc']:.4f}")
+print(f"Feature matrix final: {X.shape}")
 
-# Visualizaciones
-fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+from sklearn.metrics import RocCurveDisplay
 
+fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+# --- Comparacion de modelos ---
 modelos = list(resultados.keys())
 medias  = [resultados[m]['mean'] for m in modelos]
 stds    = [resultados[m]['std']  for m in modelos]
@@ -350,6 +330,7 @@ axes[0].set_title('Comparacion de modelos')
 for i, m in enumerate(medias):
     axes[0].text(m + 0.002, i, f'{m:.4f}', va='center', fontsize=10)
 
+# --- Matriz de confusion ---
 cm = metricas['cm']
 sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=axes[1],
             xticklabels=['No sobrevivio', 'Sobrevivio'],
@@ -358,53 +339,222 @@ axes[1].set_title(f'Matriz de confusion — {nombre_modelo}')
 axes[1].set_xlabel('Prediccion')
 axes[1].set_ylabel('Real')
 
+# --- Curva ROC ---
+RocCurveDisplay.from_predictions(
+    y_test, y_prob,
+    ax=axes[2],
+    color='#DD8452',
+    name=nombre_modelo
+)
+axes[2].plot([0, 1], [0, 1], 'k--', label='Azar')
+axes[2].set_title('Curva ROC')
+axes[2].legend()
+
 plt.tight_layout()
 plt.show()
 
 print("\nReporte de clasificacion:")
 print(metricas['report'])
 
-"""AGENTE 3 — Comunicador (Flan-T5 Generativo)"""
+"""AGENTE 3 — Comunicador
 
-# ── AGENTE 3 — Comunicador interactivo ───────────────────────
-df_raw = df_raw.reset_index(drop=True)
-print(f"df_raw verificado: {df_raw.shape}")  # debe decir (891, 12)
-
-acc = round(metricas['accuracy'], 4)
-auc = round(metricas['roc_auc'], 4)
-
-prefix_comunicador = f"""
-Eres el Agente Comunicador de un pipeline de Machine Learning.
-IMPORTANTE: Ya tenes acceso al DataFrame completo con 891 filas.
-NO inventes datos ni crees DataFrames nuevos.
-USA SIEMPRE el DataFrame que ya esta disponible como 'df'
-
-Reglas:
-- Responde SIEMPRE en castellano
-- Se claro y accesible, evita jerga excesivamente tecnica
-- Si te preguntan por una metrica, menciona el valor exacto
-- Si te preguntan por el dataset, analizalo y responde con datos reales
-
-Contexto del pipeline:
-- Agente 1 limpio el dataset: imputo nulos, creo features, escalo y codifico
-- Agente 2 uso DistilBERT para embeddings de nombres + validacion cruzada 5 folds
-- Modelo ganador: {nombre_modelo} con accuracy={acc} y AUC={auc}
+Celda 1 — Instalación:
 """
-agente3 = create_pandas_dataframe_agent(
-    llm,
-    df_raw,
-    prefix=prefix_comunicador,
-    verbose=True,
-    allow_dangerous_code=True,
-    agent_type="tool-calling"
+
+!pip install -q faiss-cpu langchain langchain-mistralai
+
+"""Celda 2 — Imports y construcción del RAG:"""
+
+import os
+import json
+from langchain_mistralai import ChatMistralAI, MistralAIEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_core.prompts import PromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.documents import Document
+
+print("Imports Agente 3 OK")
+
+"""Celda 3 — Construir documentos y base vectorial:"""
+
+from langchain_community.vectorstores import FAISS
+
+# --- Construir documentos con datos del Titanic ---
+print("="*60)
+print("AGENTE 3 — COMUNICADOR RAG")
+print("="*60)
+
+# Documento con estadisticas globales del dataset
+total         = len(df_raw)
+sobrevivieron = int(df_raw['Survived'].sum())
+murieron      = total - sobrevivieron
+pct_surv      = round(sobrevivieron / total * 100, 2)
+surv_sexo     = df_raw.groupby('Sex')['Survived'].mean().round(4).to_dict()
+surv_clase    = df_raw.groupby('Pclass')['Survived'].mean().round(4).to_dict()
+edad_media    = round(df_raw['Age'].mean(), 2)
+nulos_age     = int(df_raw['Age'].isnull().sum())
+
+doc_dataset = Document(
+    page_content=f"""
+ESTADISTICAS GLOBALES — DATASET TITANIC
+Total de pasajeros: {total}
+Sobrevivieron: {sobrevivieron} ({pct_surv}%)
+Murieron: {murieron} ({round(100 - pct_surv, 2)}%)
+Tasa de supervivencia por sexo: {surv_sexo}
+Tasa de supervivencia por clase: {surv_clase}
+Edad promedio: {edad_media} anos
+Valores nulos en Age: {nulos_age}
+Preprocesamiento (Agente 1):
+- Columnas eliminadas: PassengerId, Ticket, Cabin
+- Imputacion: Age por mediana segun titulo, Embarked por moda
+- Features creadas: FamilySize, IsAlone, FareBand, AgeBand
+- Codificacion: LabelEncoder en Sex, Embarked, Title
+- Escalado: StandardScaler en Age, Fare, FamilySize
+""",
+    metadata={"fuente": "estadisticas_dataset"}
+)
+
+# Documento con metricas del modelo
+cv_res = metricas['cv_results']
+doc_metricas = Document(
+    page_content=f"""
+RESULTADOS DEL ENTRENAMIENTO — AGENTE 2
+Modelo ganador: {nombre_modelo}
+Accuracy final (test): {round(metricas['accuracy'], 4)}
+AUC-ROC final (test): {round(metricas['roc_auc'], 4)}
+Validacion cruzada (5 folds):
+{chr(10).join([f"- {m}: {cv_res[m]['mean']:.4f} +/- {cv_res[m]['std']:.4f}" for m in cv_res])}
+Reporte de clasificacion:
+{metricas['report']}
+""",
+    metadata={"fuente": "metricas_modelo"}
+)
+# Documento con supervivencia detallada por clase y sexo
+surv_clase_sexo = df_raw.groupby(['Pclass', 'Sex'])['Survived'].agg(['sum', 'count']).reset_index()
+surv_por_clase  = df_raw[df_raw['Survived']==1]['Pclass'].value_counts().sort_index().to_dict()
+muertes_clase   = df_raw[df_raw['Survived']==0]['Pclass'].value_counts().sort_index().to_dict()
+surv_edad       = df_raw.groupby('Survived')['Age'].mean().round(2).to_dict()
+ninos_surv      = int(df_raw[(df_raw['Age'] < 18) & (df_raw['Survived']==1)].shape[0])
+ninos_total     = int(df_raw[df_raw['Age'] < 18].shape[0])
+
+doc_detalle = Document(
+    page_content=f"""
+DETALLE DE SUPERVIVENCIA — DATASET TITANIC
+
+Sobrevivientes por clase:
+- Primera clase: {surv_por_clase.get(1, 0)} sobrevivientes
+- Segunda clase: {surv_por_clase.get(2, 0)} sobrevivientes
+- Tercera clase: {surv_por_clase.get(3, 0)} sobrevivientes
+
+Fallecidos por clase:
+- Primera clase: {muertes_clase.get(1, 0)} fallecidos
+- Segunda clase: {muertes_clase.get(2, 0)} fallecidos
+- Tercera clase: {muertes_clase.get(3, 0)} fallecidos
+
+Edad promedio sobrevivientes: {surv_edad.get(1, 0)} anos
+Edad promedio fallecidos: {surv_edad.get(0, 0)} anos
+
+Ninos (menores de 18):
+- Total: {ninos_total}
+- Sobrevivieron: {ninos_surv}
+- Fallecieron: {ninos_total - ninos_surv}
+""",
+    metadata={"fuente": "detalle_supervivencia"}
+)
+
+# Convertir cada fila del dataset en un documento
+def fila_a_texto(row):
+    return (
+        f"Pasajero — Clase: {row['Pclass']}, Sexo: {row['Sex']}, "
+        f"Edad: {row['Age']}, Sobrevivio: {'Si' if row['Survived'] == 1 else 'No'}, "
+        f"Tarifa: {row['Fare']}, Embarco: {row['Embarked']}, "
+        f"Familiares: {row['SibSp'] + row['Parch']}"
+    )
+
+docs_pasajeros = [
+    Document(page_content=fila_a_texto(row), metadata={"fuente": "pasajero"})
+    for _, row in df_raw.iterrows()
+]
+
+# Filtrar documentos vacios
+todos_los_docs = [doc_dataset, doc_metricas, doc_detalle] + docs_pasajeros
+todos_los_docs = [d for d in todos_los_docs if len(d.page_content.strip()) > 10]
+print(f"Documentos validos: {len(todos_los_docs)}")
+
+# --- Embeddings con Mistral y base vectorial FAISS ---
+print("\nGenerando embeddings con Mistral... (puede tardar 2-3 minutos)")
+
+embeddings = MistralAIEmbeddings(
+    api_key=MISTRAL_API_KEY,
+    model="mistral-embed"
+)
+
+# Procesar en lotes para evitar errores de API
+batch_size  = 50
+vectorstore = None
+
+for i in range(0, len(todos_los_docs), batch_size):
+    batch = todos_los_docs[i : i + batch_size]
+    print(f"Procesando lote {i//batch_size + 1}/{-(-len(todos_los_docs)//batch_size)}...")
+    if vectorstore is None:
+        vectorstore = FAISS.from_documents(batch, embeddings)
+    else:
+        vectorstore.add_documents(batch)
+
+retriever = vectorstore.as_retriever(
+    search_type="similarity",
+    search_kwargs={"k": 6}
+)
+
+print("Base vectorial FAISS lista")
+
+"""Celda 4 — Cadena RAG y loop interactivo:
+
+
+"""
+
+# --- Cadena RAG ---
+PROMPT_TEMPLATE = """
+Sos un analista experto en datos del Titanic y machine learning.
+Responde en castellano usando UNICAMENTE la informacion del contexto.
+Si la informacion no esta en el contexto, decí:
+"No tengo suficientes datos para responder eso."
+
+Contexto:
+{context}
+
+Pregunta: {question}
+
+Respuesta:
+"""
+
+prompt = PromptTemplate(
+    input_variables=["context", "question"],
+    template=PROMPT_TEMPLATE
+)
+
+def formatear_docs(docs):
+    contexto_fijo = doc_dataset.page_content + "\n\n---\n" + doc_metricas.page_content + "\n\n---\n" + doc_detalle.page_content
+    contexto_recuperado = "\n\n---\n".join(doc.page_content for doc in docs)
+    return contexto_fijo + "\n\n---\n" + contexto_recuperado
+
+cadena_rag = (
+    {
+        "context" : retriever | formatear_docs,
+        "question": RunnablePassthrough()
+    }
+    | prompt
+    | llm
+    | StrOutputParser()
 )
 
 print("Agente 3 listo.")
 print("Ejemplos de preguntas:")
 print("  - Cuantos pasajeros sobrevivieron?")
 print("  - Cual fue el modelo con mejor accuracy?")
-print("  - Cuantos valores nulos habia en Age?")
 print("  - Cual es la tasa de supervivencia por sexo?")
+print("  - Cuantos valores nulos habia en Age?")
 print("-"*50)
 
 while True:
@@ -417,5 +567,5 @@ while True:
     if not pregunta:
         continue
 
-    respuesta = agente3.invoke(pregunta)
-    print(f"\nRespuesta: {respuesta['output']}\n")
+    respuesta = cadena_rag.invoke(pregunta)
+    print(f"\nRespuesta: {respuesta}\n")
