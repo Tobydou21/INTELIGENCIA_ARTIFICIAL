@@ -60,7 +60,6 @@ print(f"Dispositivo: {'cuda' if torch.cuda.is_available() else 'cpu'}")
 
 """3. Configuracion del LLM (Mistral)"""
 
-# --- INGRESA TU API KEY DE MISTRAL ACA ---
 MISTRAL_API_KEY = "1rOo1HhaMfhbuEhWiAusjvx2LOXlWKr9"
 
 llm = ChatMistralAI(
@@ -364,3 +363,59 @@ plt.show()
 
 print("\nReporte de clasificacion:")
 print(metricas['report'])
+
+"""AGENTE 3 — Comunicador (Flan-T5 Generativo)"""
+
+# ── AGENTE 3 — Comunicador interactivo ───────────────────────
+df_raw = df_raw.reset_index(drop=True)
+print(f"df_raw verificado: {df_raw.shape}")  # debe decir (891, 12)
+
+acc = round(metricas['accuracy'], 4)
+auc = round(metricas['roc_auc'], 4)
+
+prefix_comunicador = f"""
+Eres el Agente Comunicador de un pipeline de Machine Learning.
+IMPORTANTE: Ya tenes acceso al DataFrame completo con 891 filas.
+NO inventes datos ni crees DataFrames nuevos.
+USA SIEMPRE el DataFrame que ya esta disponible como 'df'
+
+Reglas:
+- Responde SIEMPRE en castellano
+- Se claro y accesible, evita jerga excesivamente tecnica
+- Si te preguntan por una metrica, menciona el valor exacto
+- Si te preguntan por el dataset, analizalo y responde con datos reales
+
+Contexto del pipeline:
+- Agente 1 limpio el dataset: imputo nulos, creo features, escalo y codifico
+- Agente 2 uso DistilBERT para embeddings de nombres + validacion cruzada 5 folds
+- Modelo ganador: {nombre_modelo} con accuracy={acc} y AUC={auc}
+"""
+agente3 = create_pandas_dataframe_agent(
+    llm,
+    df_raw,
+    prefix=prefix_comunicador,
+    verbose=True,
+    allow_dangerous_code=True,
+    agent_type="tool-calling"
+)
+
+print("Agente 3 listo.")
+print("Ejemplos de preguntas:")
+print("  - Cuantos pasajeros sobrevivieron?")
+print("  - Cual fue el modelo con mejor accuracy?")
+print("  - Cuantos valores nulos habia en Age?")
+print("  - Cual es la tasa de supervivencia por sexo?")
+print("-"*50)
+
+while True:
+    pregunta = input("Tu pregunta: ").strip()
+
+    if pregunta.lower() in ['salir', 'exit', 'quit', 'q']:
+        print("Agente 3 finalizado.")
+        break
+
+    if not pregunta:
+        continue
+
+    respuesta = agente3.invoke(pregunta)
+    print(f"\nRespuesta: {respuesta['output']}\n")
